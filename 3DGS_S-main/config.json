@@ -1,0 +1,16 @@
+{
+  "save_mask_interval": 1000,
+  "test_size": 0,
+  "train_keyword": "clutter",
+  "test_keyword": "extra",
+  "clutter": true,
+  "factor": 1,
+  "mask_start_epoch": -1,
+  "use_segmentation": true,
+  "seg_overlap": 0.30,
+  "debug": false,
+  "n_residuals": 1,
+  "per_channel": true,
+  "use_neural": true,
+  "lambda_reg": 1e-1
+}
