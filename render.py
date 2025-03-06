@@ -13,6 +13,8 @@ import json
 import torch
 from scene import Scene
 import os
+from utils import image_utils
+from utils import loss_utils
 from tqdm import tqdm
 from os import makedirs
 from gaussian_renderer import render
@@ -21,7 +23,6 @@ from utils.general_utils import safe_state
 from argparse import ArgumentParser
 from arguments import ModelParams, PipelineParams, get_combined_args
 from gaussian_renderer import GaussianModel
-from torchmetrics.image import PeakSignalNoiseRatio, StructuralSimilarityIndexMeasure
 from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
 
 
@@ -34,8 +35,8 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
 
     metrics = {"psnr": [], "ssim": [], "lpips": []}
     # Losses & Metrics.
-    ssim_f = StructuralSimilarityIndexMeasure(data_range=1.0).to("cuda")
-    psnr_f = PeakSignalNoiseRatio(data_range=1.0).to("cuda")
+    # ssim_f = StructuralSimilarityIndexMeasure(data_range=1.0).to("cuda")
+    # psnr_f = PeakSignalNoiseRatio(data_range=1.0).to("cuda")
     lpips_f = LearnedPerceptualImagePatchSimilarity(normalize=True).to("cuda")
 
     for idx, view in enumerate(tqdm(views, desc="Rendering progress")):
@@ -45,14 +46,14 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
         colors = rendering[:3, ...].unsqueeze(0)
         pixels = torch.clamp(pixels, 0.0, 1.0)
         colors = torch.clamp(colors, 0.0, 1.0)
-        metrics["psnr"].append(psnr_f(colors, pixels))
-        metrics["ssim"].append(ssim_f(colors, pixels))
+        metrics["psnr"].append(image_utils.psnr(rendering, gt).mean())
+        metrics["ssim"].append(loss_utils.ssim(rendering, gt).mean())
         metrics["lpips"].append(lpips_f(colors, pixels))
         torchvision.utils.save_image(rendering, os.path.join(render_path, '{0:05d}'.format(idx) + ".png"))
         torchvision.utils.save_image(gt, os.path.join(gts_path, '{0:05d}'.format(idx) + ".png"))
 
-    psnr = torch.stack(metrics["psnr"]).mean()
-    ssim = torch.stack(metrics["ssim"]).mean()
+    psnr = torch.tensor(metrics["psnr"]).mean()
+    ssim = torch.tensor(metrics["ssim"]).mean()
     lpips = torch.stack(metrics["lpips"]).mean()
     # save stats as json
     stats = {
@@ -60,8 +61,12 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
         "ssim": ssim.item(),
         "lpips": lpips.item(),
     }
-    with open(f"{model_path}/val_step_30000.json", "w") as f:
-        json.dump(stats, f)
+    if name == "train":
+        with open(f"{model_path}/val_step_train_30000.json", "w") as f:
+            json.dump(stats, f)
+    if name == "test":
+        with open(f"{model_path}/val_step_test_30000.json", "w") as f:
+            json.dump(stats, f)
 
 
 def render_sets(dataset: ModelParams, iteration: int, pipeline: PipelineParams, skip_train: bool, skip_test: bool,

@@ -19,6 +19,7 @@ from gaussian_renderer import render, network_gui
 import sys
 from scene import Scene, GaussianModel
 from utils.general_utils import safe_state
+from utils.mlp_utils import SpotLessModule,get_positional_encodings
 import uuid
 from tqdm import tqdm
 from utils.image_utils import psnr
@@ -105,7 +106,27 @@ def training(dataset, opt, pipe, config, testing_iterations, saving_iterations, 
     running_stats = {
         "hist_err": torch.zeros((10000,)),
         "avg_err": 1.0,
+        "lower_err": 0.0,
+        "upper_err": 1.0,
     }
+
+    spotless_optimizers = []
+    # 是否使用MLP生成spotless mask
+    if not config['cluster']:
+        # currently using positional encoding of order 20 (4*20 = 80)
+        # SpotLessModule MLP+sigmoid(1360->1)
+        spotless_module = SpotLessModule(
+            num_classes=1, num_features= 180
+        ).cuda()
+        spotless_optimizers = [
+            torch.optim.Adam(
+                spotless_module.parameters(),
+                lr=1e-3,
+            )
+        ]
+        spotless_loss = lambda p, minimum, maximum: torch.mean(
+            torch.nn.ReLU()(p - minimum) + torch.nn.ReLU()(maximum - p)
+        )
 
     uid_to_image_name = np.empty(len(viewpoint_stack), dtype=object)
 
@@ -159,9 +180,14 @@ def training(dataset, opt, pipe, config, testing_iterations, saving_iterations, 
         # Spotless colors
         colors = image[:3, ...]
 
+        ssimloss = 1.0 - ssim(image, gt_image)
+        # pixels_s = torch.clamp(pixels.unsqueeze(0), 0.0, 1.0)
+        # colors_s = torch.clamp(colors.unsqueeze(0), 0.0, 1.0)
+        # ssimloss = 1.0 - ssim_f(pixels_s, colors_s)
+
         error_per_pixel = torch.abs(colors - pixels) # colors pixels error_per_pixel [3,431,431]
         error_per_pixel = error_per_pixel.permute(1,2,0).unsqueeze(0) # [1,431,431,3]
-        log_error_per_pixel = error_per_pixel.clone()
+        #log_error_per_pixel = error_per_pixel.clone()
         # print(error_per_pixel)
         pred_mask = robust_mask(
             error_per_pixel, running_stats["avg_err"]
@@ -170,24 +196,85 @@ def training(dataset, opt, pipe, config, testing_iterations, saving_iterations, 
         semantics = torch.from_numpy(np.array(viewpoint_cam.features[0])).float() # 100 50 50
         sf = semantics.to("cuda")
         sf_t = sf.unsqueeze(0)
-        # cluster the semantic feature and mask based on cluster voting
-        sf_f = nn.Upsample(
-            size=(colors.shape[1], colors.shape[2]),
-            mode="nearest",
-        )(sf_t).squeeze(0) #[100 431 431]
-        pred_mask = robust_cluster_mask(pred_mask, semantics=sf_f)
+        if config['cluster']:
+            # cluster the semantic feature and mask based on cluster voting
+            sf_f = nn.Upsample(
+                size=(colors.shape[1], colors.shape[2]),
+                mode="nearest",
+            )(sf_t).squeeze(0)  # [100 431 431]
+            pred_mask = robust_cluster_mask(pred_mask, semantics=sf_f)
+        else :
+            # use spotless mlp to predict the mask
+            sf = nn.Upsample(
+                size=(colors.shape[1], colors.shape[2]),
+                mode="bilinear",
+            )(sf_t).squeeze(0)
+            # 位置编码
+            pos_enc = get_positional_encodings(
+                colors.shape[1], colors.shape[2], 20
+            ).permute((2, 0, 1))
+            sf = torch.cat([sf, pos_enc], dim=0)
+            sf_flat = sf.reshape(sf.shape[0], -1).permute((1, 0))
+            spotless_module.eval()
+            pred_mask_up = spotless_module(sf_flat)
+            pred_mask = pred_mask_up.reshape(
+                1, colors.shape[1], colors.shape[2], 1
+            )
+            # calculate lower and upper bound masks for spotless mlp loss
+            # 计算 lower and upper bound masks for spotless mlp loss
+            lower_mask = robust_mask(
+                error_per_pixel, running_stats["lower_err"]
+            )
+            upper_mask = robust_mask(
+                error_per_pixel, running_stats["upper_err"]
+            )
+        # schedule sampling of the mask based on alpha
+        # alpha 值在0到1之间变化 用于控制后续的伯努利采样
+        alpha = np.exp(-3e-3 * np.floor((1 + iteration) / 1.5))
+        pred_mask = torch.bernoulli(
+            torch.clip(
+                alpha + (1 - alpha) * pred_mask.clone().detach(),
+                min=0.0,
+                max=1.0,
+            )
+        )
         input_mask = pred_mask.clone()
         log_pred_mask = pred_mask.clone()
 
 
         # combine spotless mask with robust mask
-        mask_s = segment_overlap(input_mask.squeeze(), viewpoint_cam.segments, config).to('cuda') #[432,432]
-        mask = mask_s.clone().unsqueeze(-1).unsqueeze(0) #[1,378,504,1]
-        log_mask = mask.clone()
+        #if 20000 < iteration <= 21000:
+        #mask_s = segment_overlap(input_mask.squeeze(), viewpoint_cam.segments, config).to('cuda') #[432,432]
+        #log_mask = mask_s.clone().unsqueeze(-1).unsqueeze(0)
+        #mask = mask_s.clone().unsqueeze(-1).unsqueeze(0) #[1,378,504,1]
+        #else:
+        if 29000 < iteration <= 30000:
+            mask_s = segment_overlap(input_mask.squeeze(), viewpoint_cam.segments, config).to('cuda')  # [432,432]
+            mask = mask_s.squeeze().unsqueeze(-1).unsqueeze(0)
+        else:
+            mask = input_mask
+        log_mask = mask.clone().detach()
+
 
         rgbloss = (mask.clone().detach() * error_per_pixel).mean()
-        loss = rgbloss
+        #ssimloss = (mask.clone().detach() * ssimloss).mean()
+
+        if  iteration <= 1000:
+            Ll1 = l1_loss(image, gt_image)
+        else:
+            Ll1 = rgbloss
+        #Ll1 = rgbloss
+        loss = (1.0 - 0.2) * Ll1 + 0.2 * ssimloss
         loss.backward()
+
+        if not config['cluster']:
+            spotless_module.train()
+            spot_loss = spotless_loss(
+                pred_mask_up.flatten(), upper_mask.flatten(), lower_mask.flatten()
+            )
+            reg = 0.5 * spotless_module.get_regularizer()
+            spot_loss = spot_loss + reg
+            spot_loss.backward()
 
         uid_to_image_name[viewpoint_cam.uid] = viewpoint_cam.image_name
         iter_end.record()
@@ -196,36 +283,33 @@ def training(dataset, opt, pipe, config, testing_iterations, saving_iterations, 
                 bins=10000,
                 range=(0.0, 1.0),
             )[0]
-        new_his,new_avg = update_running_stats(running_stats)
+        new_his,new_avg,new_lower,new_upper = update_running_stats(running_stats)
         running_stats["hist_err"] = new_his
         running_stats["avg_err"] = new_avg
-        if iteration % config["save_mask_interval"] == 0:
+        running_stats["lower_err"] = new_lower
+        running_stats["upper_err"] = new_upper
+        if iteration > opt.iterations - 200:
             path = os.path.join(scene.model_path, 'masks')
-            seg_mask_path = os.path.join(path, 'seg_mask')
-            pre_mask_path = os.path.join(path, 'pre_log')
+            pre_mask_path = os.path.join(path, 'pre_mask')
+            pre_mask_agg_path = os.path.join(path, 'pre_mask_agg')
+            sam_mask_path = os.path.join(path, 'sam_mask')
+
 
             if not os.path.exists(os.path.join(scene.model_path, 'masks')):
                 os.mkdir(path)
-                os.mkdir(seg_mask_path)
                 os.mkdir(pre_mask_path)
+                os.mkdir(pre_mask_agg_path)
+                os.mkdir(sam_mask_path)
 
-            rgb_pred_mask_1 = (
+            log_pixels = pixels.clone().permute(1, 2, 0).unsqueeze(0)
+
+            pre_mask = (
                 (log_pred_mask_test > 0.5).repeat(1, 1, 1, 3).clone().detach()
             )
-
-            rgb_pred_mask_2 = (
-                (log_pred_mask > 0.5).repeat(1, 1, 1, 3).clone().detach()
-            )
-
-            rgb_mask = (
-                (log_mask > 0.5).repeat(1, 1, 1, 3).clone().detach()
-            )
-            log_pixels = pixels.clone().permute(1,2,0).unsqueeze(0)
-            log_colors = colors.clone().permute(1,2,0).unsqueeze(0)
-            temp = torch.cat(
-                    [log_pixels, log_error_per_pixel, rgb_pred_mask_1, rgb_pred_mask_2, rgb_mask, log_colors], dim=2)
+            pre_mask_temp = torch.cat(
+                [log_pixels, pre_mask], dim=2)
             canvas = (
-                temp
+                pre_mask_temp
                 .squeeze(0)
                 .cpu()
                 .detach()
@@ -235,6 +319,40 @@ def training(dataset, opt, pipe, config, testing_iterations, saving_iterations, 
                 f"{pre_mask_path}/train_{viewpoint_cam.image_name}.png",
                 (canvas * 255).astype(np.uint8),
             )
+
+            pre_mask_agg = (
+                (log_pred_mask > 0.5).repeat(1, 1, 1, 3).clone().detach()
+            )
+            pre_mask_agg_temp = torch.cat(
+                [log_pixels, pre_mask_agg], dim=2)
+            canvas = (
+                pre_mask_agg_temp
+                .squeeze(0)
+                .cpu()
+                .detach()
+                .numpy()
+            )
+            imageio.imwrite(
+                f"{pre_mask_agg_path}/train_{viewpoint_cam.image_name}.png",
+                (canvas * 255).astype(np.uint8),
+            )
+
+            sam_mask = (
+                (log_mask > 0.5).repeat(1, 1, 1, 3).clone().detach()
+            )
+            canvas = (
+                sam_mask
+                .squeeze(0)
+                .cpu()
+                .detach()
+                .numpy()
+            )
+            imageio.imwrite(
+                f"{sam_mask_path}/train_{viewpoint_cam.image_name}.png",
+                (canvas * 255).astype(np.uint8),
+            )
+
+
 
         with torch.no_grad():
             # Progress bar
@@ -275,6 +393,9 @@ def training(dataset, opt, pipe, config, testing_iterations, saving_iterations, 
             if iteration < opt.iterations:
                 gaussians.optimizer.step()
                 gaussians.optimizer.zero_grad(set_to_none=True)
+                for optimizer in spotless_optimizers:
+                    optimizer.step()
+                    optimizer.zero_grad(set_to_none=True)
 
             if (iteration in checkpoint_iterations):
                 print("\n[ITER {}] Saving Checkpoint".format(iteration))
@@ -295,7 +416,20 @@ def update_running_stats(info):
             0
         ]
     ]
-    return info["hist_err"],info["avg_err"]
+    lower_err = torch.sum(info["hist_err"]) * 0.5
+    upper_err = torch.sum(info["hist_err"]) * 0.9
+
+    info["lower_err"] = torch.linspace(0, 1, 10000 + 1)[
+        torch.where(torch.cumsum(info["hist_err"], 0) >= lower_err)[
+            0
+        ][0]
+    ]
+    info["upper_err"] = torch.linspace(0, 1, 10000 + 1)[
+        torch.where(torch.cumsum(info["hist_err"], 0) >= upper_err)[
+            0
+        ][0]
+    ]
+    return info["hist_err"],info["avg_err"],info["lower_err"],info["upper_err"]
 
 def prepare_output_and_logger(args, dataset, opt, pipe, config):
     if not args.model_path:

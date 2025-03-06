@@ -100,7 +100,7 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder, undis_folde
             K[:2, :] /= factor
             height = height // factor
             width = width // factor
-
+        params = None
         if intr.model == "SIMPLE_PINHOLE":
             focal_length_x = intr.params[0]
             FovY = focal2fov(focal_length_x, height)
@@ -142,7 +142,9 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder, undis_folde
 
         # undistortion
         # params == 0 means no distortion
-        if len(params) > 0:
+        if params is None:
+            image = Image.open(image_path)
+        elif len(params) > 0:
             K_undist, roi_undist = cv2.getOptimalNewCameraMatrix(
                 K, params, (width, height), 0
             )
@@ -157,10 +159,8 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder, undis_folde
             #image = np.transpose(image_distorted,[2, 0, 1])
             image = image_distorted
             K = K_undist
-            # image_path = image_distorted_path
-            # imageio.imsave(image_distorted_path, image_distorted)
-        else:
-            image = Image.open(image_path)
+            image_path = image_distorted_path
+            imageio.imsave(image_distorted_path, image_distorted)
 
         image_name = os.path.basename(image_path).split(".")[0]
         #image = Image.open(image_path)
@@ -249,7 +249,8 @@ def readColmapSceneInfo(path, images, eval, config):
     undis_dir = "undistortedimages"
     mask_dir = os.path.join(path, 'segments', 'masks')
     cam_infos_unsorted = readColmapCameras(cam_extrinsics=cam_extrinsics, cam_intrinsics=cam_intrinsics,
-                                           images_folder=os.path.join(path, reading_dir), undis_folder=os.path.join(path, undis_dir), mask_folder=mask_dir, clutter=config['clutter'], factor=config['factor'])
+                                           images_folder=os.path.join(path, reading_dir), undis_folder=os.path.join(path, undis_dir),
+                                           mask_folder=mask_dir, clutter=config['clutter'], factor=config['factor'])
     cam_infos = sorted(cam_infos_unsorted.copy(), key=lambda x: x.image_name)
 
     if eval:
@@ -257,13 +258,17 @@ def readColmapSceneInfo(path, images, eval, config):
             train_cam_infos = [c for idx, c in enumerate(cam_infos) if idx >= config['test_size']]
             test_cam_infos = [c for idx, c in enumerate(cam_infos) if idx < config['test_size']]
         else:
-            train_cam_infos = []
-            test_cam_infos = []
-            for idx, c in enumerate(cam_infos):
-                if c.image_name.find(config['train_keyword']) != -1:
-                    train_cam_infos.append(c)
-                else:
-                    test_cam_infos.append(c)
+            train_word = config['train_keyword']
+            test_word = config['test_keyword']
+            train_cam_infos = [c for c in cam_infos if c.image_name.find(train_word) != -1]
+            test_cam_infos = [c for c in cam_infos if c.image_name.find(test_word) != -1]
+            # train_cam_infos = []
+            # test_cam_infos = []
+            # for idx, c in enumerate(cam_infos):
+            #     if c.image_name.find(config['train_keyword']) != -1:
+            #         train_cam_infos.append(c)
+            #     elif c.image_name.find(config['test_keyword']) != -1:
+            #         test_cam_infos.append(c)
     else:
         train_cam_infos = cam_infos
         test_cam_infos = []

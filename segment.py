@@ -159,9 +159,9 @@ def main(args: argparse.Namespace) -> None:
 
     for t in tqdm(targets):
         image = cv2.imread(t)
-        #resolution = [round(image.shape[1] / resolution_scale), round(image.shape[0] / resolution_scale)]
+        resolution = [round(image.shape[1] // resolution_scale), round(image.shape[0] // resolution_scale)]
         #resolution = [431,431]
-        resolution = [503, 377]
+        #resolution = [494, 367]
         image = cv2.resize(image, resolution)
 
         if image is None:
