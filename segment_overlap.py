@@ -6,7 +6,7 @@ import torch
 def segment_overlap(mask, segments, config):
     segment_rles = [s['segmentation'] for s in segments]
     segment_areas = [s['area'] for s in segments]
-    segment_bbox = [s['bbox'] for s in segments]
+    #segment_bbox = [s['bbox'] for s in segments]
     #orin_mask = mask.detach().cpu()
 
     mask = np.uint8(1) - np.copy(mask.detach().cpu(), order='F').astype(np.uint8)

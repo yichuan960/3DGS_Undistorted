@@ -250,7 +250,7 @@ def readColmapSceneInfo(path, images, eval, config):
     mask_dir = os.path.join(path, 'segments', 'masks')
     cam_infos_unsorted = readColmapCameras(cam_extrinsics=cam_extrinsics, cam_intrinsics=cam_intrinsics,
                                            images_folder=os.path.join(path, reading_dir), undis_folder=os.path.join(path, undis_dir),
-                                           mask_folder=mask_dir, clutter=config['clutter'], factor=config['factor'])
+                                           mask_folder=mask_dir, clutter=config['cluster'], factor=config['factor'])
     cam_infos = sorted(cam_infos_unsorted.copy(), key=lambda x: x.image_name)
 
     if eval:
@@ -262,13 +262,6 @@ def readColmapSceneInfo(path, images, eval, config):
             test_word = config['test_keyword']
             train_cam_infos = [c for c in cam_infos if c.image_name.find(train_word) != -1]
             test_cam_infos = [c for c in cam_infos if c.image_name.find(test_word) != -1]
-            # train_cam_infos = []
-            # test_cam_infos = []
-            # for idx, c in enumerate(cam_infos):
-            #     if c.image_name.find(config['train_keyword']) != -1:
-            #         train_cam_infos.append(c)
-            #     elif c.image_name.find(config['test_keyword']) != -1:
-            #         test_cam_infos.append(c)
     else:
         train_cam_infos = cam_infos
         test_cam_infos = []

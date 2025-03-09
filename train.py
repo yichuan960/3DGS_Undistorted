@@ -113,10 +113,11 @@ def training(dataset, opt, pipe, config, testing_iterations, saving_iterations, 
     spotless_optimizers = []
     # 是否使用MLP生成spotless mask
     if not config['cluster']:
+        print("MLP mask")
         # currently using positional encoding of order 20 (4*20 = 80)
         # SpotLessModule MLP+sigmoid(1360->1)
         spotless_module = SpotLessModule(
-            num_classes=1, num_features= 180
+            num_classes=1, num_features= 1360
         ).cuda()
         spotless_optimizers = [
             torch.optim.Adam(
@@ -181,14 +182,10 @@ def training(dataset, opt, pipe, config, testing_iterations, saving_iterations, 
         colors = image[:3, ...]
 
         ssimloss = 1.0 - ssim(image, gt_image)
-        # pixels_s = torch.clamp(pixels.unsqueeze(0), 0.0, 1.0)
-        # colors_s = torch.clamp(colors.unsqueeze(0), 0.0, 1.0)
-        # ssimloss = 1.0 - ssim_f(pixels_s, colors_s)
 
         error_per_pixel = torch.abs(colors - pixels) # colors pixels error_per_pixel [3,431,431]
         error_per_pixel = error_per_pixel.permute(1,2,0).unsqueeze(0) # [1,431,431,3]
-        #log_error_per_pixel = error_per_pixel.clone()
-        # print(error_per_pixel)
+
         pred_mask = robust_mask(
             error_per_pixel, running_stats["avg_err"]
         )
@@ -243,12 +240,7 @@ def training(dataset, opt, pipe, config, testing_iterations, saving_iterations, 
 
 
         # combine spotless mask with robust mask
-        #if 20000 < iteration <= 21000:
-        #mask_s = segment_overlap(input_mask.squeeze(), viewpoint_cam.segments, config).to('cuda') #[432,432]
-        #log_mask = mask_s.clone().unsqueeze(-1).unsqueeze(0)
-        #mask = mask_s.clone().unsqueeze(-1).unsqueeze(0) #[1,378,504,1]
-        #else:
-        if 29000 < iteration <= 30000:
+        if opt.iterations - 1000 < iteration <= opt.iterations:
             mask_s = segment_overlap(input_mask.squeeze(), viewpoint_cam.segments, config).to('cuda')  # [432,432]
             mask = mask_s.squeeze().unsqueeze(-1).unsqueeze(0)
         else:
@@ -257,14 +249,12 @@ def training(dataset, opt, pipe, config, testing_iterations, saving_iterations, 
 
 
         rgbloss = (mask.clone().detach() * error_per_pixel).mean()
-        #ssimloss = (mask.clone().detach() * ssimloss).mean()
 
         if  iteration <= 1000:
             Ll1 = l1_loss(image, gt_image)
         else:
             Ll1 = rgbloss
-        #Ll1 = rgbloss
-        loss = (1.0 - 0.2) * Ll1 + 0.2 * ssimloss
+        loss = (1.0 - config['ssim_lambda']) * Ll1 + config['ssim_lambda'] * ssimloss
         loss.backward()
 
         if not config['cluster']:
@@ -288,7 +278,7 @@ def training(dataset, opt, pipe, config, testing_iterations, saving_iterations, 
         running_stats["avg_err"] = new_avg
         running_stats["lower_err"] = new_lower
         running_stats["upper_err"] = new_upper
-        if iteration > opt.iterations - 200:
+        if iteration > opt.iterations - 400:
             path = os.path.join(scene.model_path, 'masks')
             pre_mask_path = os.path.join(path, 'pre_mask')
             pre_mask_agg_path = os.path.join(path, 'pre_mask_agg')
@@ -393,9 +383,9 @@ def training(dataset, opt, pipe, config, testing_iterations, saving_iterations, 
             if iteration < opt.iterations:
                 gaussians.optimizer.step()
                 gaussians.optimizer.zero_grad(set_to_none=True)
-                for optimizer in spotless_optimizers:
-                    optimizer.step()
-                    optimizer.zero_grad(set_to_none=True)
+            for optimizer in spotless_optimizers:
+                optimizer.step()
+                optimizer.zero_grad(set_to_none=True)
 
             if (iteration in checkpoint_iterations):
                 print("\n[ITER {}] Saving Checkpoint".format(iteration))
