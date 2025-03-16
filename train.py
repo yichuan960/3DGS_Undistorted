@@ -181,7 +181,7 @@ def training(dataset, opt, pipe, config, testing_iterations, saving_iterations, 
         # Spotless colors
         colors = image[:3, ...]
 
-        ssimloss = 1.0 - ssim(image, gt_image)
+        ssim_value = (ssim(image, gt_image, size_average=False)).permute(1,2,0).unsqueeze(0)
 
         error_per_pixel = torch.abs(colors - pixels) # colors pixels error_per_pixel [3,431,431]
         error_per_pixel = error_per_pixel.permute(1,2,0).unsqueeze(0) # [1,431,431,3]
@@ -245,16 +245,20 @@ def training(dataset, opt, pipe, config, testing_iterations, saving_iterations, 
             mask = mask_s.squeeze().unsqueeze(-1).unsqueeze(0)
         else:
             mask = input_mask
+        #mask = input_mask
         log_mask = mask.clone().detach()
 
 
         rgbloss = (mask.clone().detach() * error_per_pixel).mean()
+        ssim_value = torch.mean(ssim_value * mask.clone().detach())
 
-        if  iteration <= 1000:
-            Ll1 = l1_loss(image, gt_image)
-        else:
-            Ll1 = rgbloss
-        loss = (1.0 - config['ssim_lambda']) * Ll1 + config['ssim_lambda'] * ssimloss
+        # if  iteration <= 1000:
+        #     Ll1 = l1_loss(image, gt_image)
+        # else:
+        #     Ll1 = rgbloss
+
+        Ll1 = rgbloss
+        loss = (1.0 - config['ssim_lambda']) * Ll1 + config['ssim_lambda'] * (1.0 - ssim_value)
         loss.backward()
 
         if not config['cluster']:
@@ -281,7 +285,7 @@ def training(dataset, opt, pipe, config, testing_iterations, saving_iterations, 
         if iteration > opt.iterations - 400:
             path = os.path.join(scene.model_path, 'masks')
             pre_mask_path = os.path.join(path, 'pre_mask')
-            pre_mask_agg_path = os.path.join(path, 'pre_mask_agg')
+            pre_mask_agg_path = os.path.join(path, 'pre_mask_mlp')
             sam_mask_path = os.path.join(path, 'sam_mask')
 
 
