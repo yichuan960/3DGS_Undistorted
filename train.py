@@ -49,8 +49,8 @@ def robust_mask(
     error_per_pixel: torch.Tensor, loss_threshold: float
 ) -> torch.Tensor:
     epsilon = 1e-3
-    error_per_pixel = error_per_pixel.mean(axis=-1, keepdims=True) #[1,431,431,1]
-    error_per_pixel = error_per_pixel.squeeze(-1).unsqueeze(0) # [1,1,431,431]
+    error_per_pixel = error_per_pixel.mean(axis=-1, keepdims=True)
+    error_per_pixel = error_per_pixel.squeeze(-1).unsqueeze(0)
     is_inlier_pixel = (error_per_pixel < loss_threshold).float()
     window_size = 3
     channel = 1
@@ -62,10 +62,10 @@ def robust_mask(
     window = window.type_as(error_per_pixel)
     has_inlier_neighbors = F.conv2d(
         is_inlier_pixel, window, padding=window_size // 2, groups=channel
-    ) # [1,1,431,431]
+    )
     has_inlier_neighbors = (has_inlier_neighbors > 0.5).float()
     is_inlier_pixel = ((has_inlier_neighbors + is_inlier_pixel) > epsilon).float()
-    pred_mask = is_inlier_pixel.squeeze(0).unsqueeze(-1) # [1,431,431,1]
+    pred_mask = is_inlier_pixel.squeeze(0).unsqueeze(-1)
     return pred_mask
 
 def robust_cluster_mask(inlier_sf, semantics):
@@ -183,14 +183,14 @@ def training(dataset, opt, pipe, config, testing_iterations, saving_iterations, 
 
         ssim_value = (ssim(image, gt_image, size_average=False)).permute(1,2,0).unsqueeze(0)
 
-        error_per_pixel = torch.abs(colors - pixels) # colors pixels error_per_pixel [3,431,431]
-        error_per_pixel = error_per_pixel.permute(1,2,0).unsqueeze(0) # [1,431,431,3]
+        error_per_pixel = torch.abs(colors - pixels)
+        error_per_pixel = error_per_pixel.permute(1,2,0).unsqueeze(0)
 
         pred_mask = robust_mask(
             error_per_pixel, running_stats["avg_err"]
         )
         log_pred_mask_test = pred_mask.clone()
-        semantics = torch.from_numpy(np.array(viewpoint_cam.features[0])).float() # 100 50 50
+        semantics = torch.from_numpy(np.array(viewpoint_cam.features[0])).float()
         sf = semantics.to("cuda")
         sf_t = sf.unsqueeze(0)
         if config['cluster']:
@@ -198,7 +198,7 @@ def training(dataset, opt, pipe, config, testing_iterations, saving_iterations, 
             sf_f = nn.Upsample(
                 size=(colors.shape[1], colors.shape[2]),
                 mode="nearest",
-            )(sf_t).squeeze(0)  # [100 431 431]
+            )(sf_t).squeeze(0)
             pred_mask = robust_cluster_mask(pred_mask, semantics=sf_f)
         else :
             # use spotless mlp to predict the mask
@@ -206,7 +206,6 @@ def training(dataset, opt, pipe, config, testing_iterations, saving_iterations, 
                 size=(colors.shape[1], colors.shape[2]),
                 mode="bilinear",
             )(sf_t).squeeze(0)
-            # 位置编码
             pos_enc = get_positional_encodings(
                 colors.shape[1], colors.shape[2], 20
             ).permute((2, 0, 1))
@@ -218,7 +217,6 @@ def training(dataset, opt, pipe, config, testing_iterations, saving_iterations, 
                 1, colors.shape[1], colors.shape[2], 1
             )
             # calculate lower and upper bound masks for spotless mlp loss
-            # 计算 lower and upper bound masks for spotless mlp loss
             lower_mask = robust_mask(
                 error_per_pixel, running_stats["lower_err"]
             )
@@ -226,7 +224,6 @@ def training(dataset, opt, pipe, config, testing_iterations, saving_iterations, 
                 error_per_pixel, running_stats["upper_err"]
             )
         # schedule sampling of the mask based on alpha
-        # alpha 值在0到1之间变化 用于控制后续的伯努利采样
         alpha = np.exp(-3e-3 * np.floor((1 + iteration) / 1.5))
         pred_mask = torch.bernoulli(
             torch.clip(
@@ -245,17 +242,11 @@ def training(dataset, opt, pipe, config, testing_iterations, saving_iterations, 
             mask = mask_s.squeeze().unsqueeze(-1).unsqueeze(0)
         else:
             mask = input_mask
-        #mask = input_mask
         log_mask = mask.clone().detach()
 
 
         rgbloss = (mask.clone().detach() * error_per_pixel).mean()
         ssim_value = torch.mean(ssim_value * mask.clone().detach())
-
-        # if  iteration <= 1000:
-        #     Ll1 = l1_loss(image, gt_image)
-        # else:
-        #     Ll1 = rgbloss
 
         Ll1 = rgbloss
         loss = (1.0 - config['ssim_lambda']) * Ll1 + config['ssim_lambda'] * (1.0 - ssim_value)
@@ -358,8 +349,6 @@ def training(dataset, opt, pipe, config, testing_iterations, saving_iterations, 
                 progress_bar.close()
 
             # Log and save
-            #training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end),
-            #                testing_iterations, scene, render, (pipe, background))
             if (iteration in saving_iterations):
                 print("\n[ITER {}] Saving Gaussians".format(iteration))
                 mem = torch.cuda.max_memory_allocated() / 1024 ** 3
@@ -371,7 +360,6 @@ def training(dataset, opt, pipe, config, testing_iterations, saving_iterations, 
                 # Keep track of max radii in image-space for pruning
                 gaussians.max_radii2D[visibility_filter] = torch.max(gaussians.max_radii2D[visibility_filter],
                                                                      radii[visibility_filter])
-                #gaussians.add_densification_stats(viewspace_point_tensor, visibility_filter)
                 gaussians.add_densification_stats(viewspace_point_tensor, visibility_filter, image.shape[2],
                                                   image.shape[1])
 

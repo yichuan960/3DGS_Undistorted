@@ -14,12 +14,6 @@ def segment_overlap(mask, segments, config):
     areas_overlaps = [mask_util.area(rle) / seg_area for (rle, seg_area) in zip(intersections, segment_areas)]
 
     selected_seg = [seg for (seg, overlap) in zip(segment_rles, areas_overlaps) if overlap >= config['seg_overlap']]
-    # selected_seg = []
-    # for (seg, inter, overlap) in zip(segment_rles, intersections, areas_overlaps):
-    #     if overlap >= config['seg_overlap']:
-    #         selected_seg.append(seg)
-    #     else:
-    #         selected_seg.append(inter)
 
     if len(selected_seg) > 0:
         return 1. - torch.tensor(mask_util.decode(mask_util.merge(selected_seg)))
