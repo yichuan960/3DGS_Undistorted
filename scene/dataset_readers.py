@@ -110,61 +110,13 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder, undis_folde
             focal_length_y = intr.params[1]
             FovY = focal2fov(focal_length_y, height)
             FovX = focal2fov(focal_length_x, width)
-        elif intr.model == "SIMPLE_RADIAL":
-            focal_length_x = intr.params[0]
-            focal_length_y = intr.params[1]
-            FovY = focal2fov(focal_length_y, height)
-            FovX = focal2fov(focal_length_x, width)
-            params = np.array([intr.params[4]], dtype=np.float32)
-        elif intr.model == "RADIAL":
-            focal_length_x = intr.params[0]
-            focal_length_y = intr.params[1]
-            FovY = focal2fov(focal_length_y, height)
-            FovX = focal2fov(focal_length_x, width)
-            params = np.array([intr.params[4], intr.params[5], 0.0, 0.0], dtype=np.float32)
-        elif intr.model == "OPENCV":
-            focal_length_x = intr.params[0]
-            focal_length_y = intr.params[1]
-            FovY = focal2fov(focal_length_y, height)
-            FovX = focal2fov(focal_length_x, width)
-            params = np.array([intr.params[4], intr.params[5], intr.params[6], intr.params[7]], dtype=np.float32)
-        elif intr.model == "OPENCV_FISHEYE":
-            focal_length_x = intr.params[0]
-            focal_length_y = intr.params[1]
-            FovY = focal2fov(focal_length_y, height)
-            FovX = focal2fov(focal_length_x, width)
-            params = np.array([intr.params[4], intr.params[5], intr.params[6], intr.params[7]], dtype=np.float32)
         else:
-            assert False, "Colmap camera model not handled: only (PINHOLE SIMPLE_PINHOLE SIMPLE_RADIAL RADIAL OPENCV OPENCV_FISHEYE cameras) supported!"
+            assert False, "Colmap camera model not handled: only (PINHOLE SIMPLE_PINHOLE cameras) supported!"
 
         image_path = os.path.join(images_folder, os.path.basename(extr.name))
-        image_distorted_path = os.path.join(undis_folder, os.path.basename(extr.name))
-
-        # undistortion
-        # params == 0 means no distortion
-        if params is None:
-            image = Image.open(image_path)
-        elif len(params) > 0:
-            K_undist, roi_undist = cv2.getOptimalNewCameraMatrix(
-                K, params, (width, height), 0
-            )
-            mapx, mapy = cv2.initUndistortRectifyMap(
-                K, params, None, K_undist, (width, height), cv2.CV_32FC1
-            )
-            image_o = imageio.imread(image_path)[..., :3]
-            # Images are distorted. Undistort them.
-            image_distorted = cv2.remap(image_o, mapx, mapy, cv2.INTER_LINEAR)
-            x, y, w, h = roi_undist
-            image_distorted = image_distorted[y: y + h, x: x + w]
-            #image = np.transpose(image_distorted,[2, 0, 1])
-            image = image_distorted
-            K = K_undist
-            image_path = image_distorted_path
-            imageio.imsave(image_distorted_path, image_distorted)
+        image = Image.open(image_path)
 
         image_name = os.path.basename(image_path).split(".")[0]
-        #image = Image.open(image_path)
-
 
         with open(os.path.join(mask_folder, os.path.basename(extr.name).split('.')[0] + '.json'), 'r') as file:
             segments = json.load(file)
